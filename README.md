@@ -1,9 +1,17 @@
-# SensESP Project Template
+# SensESP Windlass Controller
 
-This repository provides a template for [SensESP](https://github.com/SignalK/SensESP/) projects.
-Fork, clone or download the repository and try building and uploading the project to an ESP32 device.
-You should immediately see output on the serial monitor!
+The Windlass Controller implements an auxiliary device to be connected to the anchor windlass relay box and the chain counter leveraging Expressif ESP32 WROM microcontroller and the SensESP framework (https://github.com/SignalK/SensESP).
 
-To customize the template for your own purposes, edit the `src/main.cpp` and `platformio.ini` files.
+The device connects to an onboard Signal K server (https://signalk.org), providing the following features:
 
-Comprehensive documentation for SensESP, including how to get started with your own project, is available at the [SensESP documentation site](https://signalk.org/SensESP/).
+* Count deployed anchor rods in meters.
+* Measure the up/down chain speed.
+* Sense the windlass status as going up, down, free down, free up, and off.
+* Enables remote/automatic windlass control reading the status.
+* Fully customizable Signal K keys and calibration parameters. 
+
+A KiCad drawing and schematics are available for download and implementation.
+
+The device and all the software are provided with no warrinty or responsibility for correct or incorrect usage, eventually generating damages to people or freights.
+
+This work has partially been inspired by this repository https://github.com/AK-Homberger/ESP8266_AnchorChainControl_WLAN and the SensESP example "Chain Counter".
