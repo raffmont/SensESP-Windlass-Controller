@@ -162,7 +162,7 @@ void setup() {
 
   
   auto* goingUpSensor = new DigitalInputChange(
-      goUpPin, INPUT_PULLDOWN, goingUpDownSensorReadDelay, goingUpDownSensorReadDelayConfigPath);
+      goingUpPin, INPUT_PULLDOWN, goingUpDownSensorReadDelay, goingUpDownSensorReadDelayConfigPath);
 
   auto* goingDownSensor = new DigitalInputChange(
       goingDownPin, INPUT_PULLDOWN, goingUpDownSensorReadDelay, goingUpDownSensorReadDelayConfigPath);
