@@ -12,6 +12,8 @@ The device connects to an onboard Signal K server (https://signalk.org), providi
 * Sense the windlass status as going up, down, free down, free up, and off.
 * Enables remote/automatic windlass control reading the status.
 * Fully customizable Signal K keys and calibration parameters. 
+* Local chain counter reset button
+* Remote reset of chain counter
 
 
 The device and all the software are provided with no warrinty or responsibility for correct or incorrect usage, eventually generating damages to people or freights.
