@@ -61,17 +61,8 @@ const uint8_t resetPin = 21;
 int upDown = 0;       
 
 
-// ** temporarily initialise Counter = 0;
-// int chainCounter = 0;
-
- Preferences preferences;
-
-// Retrieves last ChainCounter value from nonvolatile storage
-//  if the key does not exist, return a default value of 0.
-  // Note: Key name is limited to 15 chars.
-  // "counter"is the name of the key used to store chainCounter in ESP32 flash (aka Non Vol)
-
-  int chainCounter = preferences.getInt("counter", 0);
+//  initialise chainCounter 
+  int chainCounter ;
 
 
 // Define windlass (anchor winch)  gypsy details
@@ -82,31 +73,45 @@ int upDown = 0;
 float chainCalibrationValue = 0.405f; 
 float chainCalibrationOffset = 0.00f;
 
- 
+// initiate an instance of the Preferences library. Here its called preferences
+
+  Preferences preferences;
+
 
 // The setup function performs one-time application initialization.
 void setup() {
 
-//  ****  not as yet working - for storing chainCounter into non vol flash memeory *****************
 
  // Open Preferences with "my_app" namespace. Each application module, library, etc
   // has to use a namespace name to prevent key name collisions. 
   // We will open storage in RW-mode (second parameter has to be false).
   // Note: Namespace name is limited to 15 chars.
 
- /** preferences.begin("my_app", false);
+  preferences.begin("my_app", false);
 
-// test ...  Store the counter to the Preferences
-///         where should this go?
+  // Retrieves stored_ChainCounter value from nonvolatile storage
+  //  if the key does not exist, it will return a default value of 0.
+  // Note: Key name is limited to 15 chars.
+  // "counter" is the name of the key used to store chainCounter in ESP32 flash (aka Non Vol)
+
+ int  stored_chainCounter = preferences.getInt("counter", 0);
+
+// retrieve the stored counter and update chainCounter 
+ chainCounter=stored_chainCounter;
+
+// test ...  Store a dummy  counter value =45 to the Preferences
+// confirmed workin ok... 
+/// needs some logic for when/how to do the put 
+// after a wait period to let chain deployment settle
+//  (to reduce frequency/number of writes to flash memory)
               
- //      preferences.putInt("counter", chainCounter);
+    preferences.putInt("counter", 45);
 
-// Close the Preferences... where does this go? 
- //     preferences.end();
+// Close the Preferences...
+     preferences.end();
 
 // 
 
-*/ 
 
 // Delays
  int goingUpSensorDebounceDelay = 30;

@@ -1,5 +1,7 @@
 # SensESP Windlass Chain Counter
 
+****   NOTE - still under development ******
+
 This Windlass Counter is a fork of .... https://github.com/raffmont/SensESP-Windlass-Controller 
 but with the "control" elements deleted , retaining just the "counter" and associated logic.
 It requires electrical access to READ the Up & Down control signals from the windlass, AND the chain counter sensor (reed or hall effect) 
