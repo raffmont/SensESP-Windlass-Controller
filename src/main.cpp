@@ -172,7 +172,7 @@ void setup() {
   digitalWrite(goUpPin, LOW );
   digitalWrite(goDownPin, LOW );
   
-  /**
+/**
    * DigitalInputChange monitors a physical button/solenoid connected to BUTTON_PIN.
    * The input PIN is set to PULLDOWN (LOW) & the button or solenoid must take the input voltage HIGH when operated.
    * Because its interrupt type is CHANGE, it will emit a value when the button
