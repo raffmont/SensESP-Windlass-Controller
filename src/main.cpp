@@ -9,8 +9,10 @@
 // for external hardware libraries.
 
 #include "sensesp/sensors/digital_output.h"
+#include "sensesp/controllers/smart_switch_controller.h"
 #include "sensesp/signalk/signalk_listener.h"
 #include "sensesp/signalk/signalk_value_listener.h"
+#include "sensesp/signalk/signalk_put_request_listener.h"
 #include "sensesp/sensors/digital_input.h"
 #include "sensesp/sensors/sensor.h"
 #include "sensesp/signalk/signalk_output.h"
@@ -22,69 +24,111 @@
 #include "sensesp_app.h"
 #include "sensesp_app_builder.h"
 
+#include <Preferences.h>
+
 #include <math.h>
 
 using namespace sensesp;
 
-#define DEBOUNCE_DELAY 250
+
 #define WINDLASS_GO_DOWN +1
 #define WINDLASS_GO_UP -1
 
 
 reactesp::ReactESP app;
 
-// The chain counter pin
-const uint8_t chainCounterPin = 14;
-const uint8_t chainSpeedPin = 27;
+// Define the Pins for chain counter & chain speed
+const uint8_t chainCounterPin = 23;
+const uint8_t chainSpeedPin = 22;
 
-// Actuate the relay for going up
-const uint8_t goUpPin = 2;
+// Define the PIN for Relay goUP (output)
+const uint8_t goUpPin = 19;
 
-// Actuate the relay for going down
+// Define the PIN for Relay goDown (output)
 const uint8_t goDownPin = 4;
 
-// Sense if the windlass is going down
+// Define the PIN for detecting windlass direction goingUp
 const uint8_t goingUpPin = 16;
 
-// Sense if the windalss is going up
+// Define the PIN for detecting windlass direction goingDown
 const uint8_t goingDownPin = 17;     
+ 
+ //Define the PIN for chain counter reset button
+const uint8_t resetPin = 21;
+
+// upDown is chain direction:  1 =  Chain down / count up, -1 = Chain up / count backwards
+// initialise to zero 
+int upDown = 0;       
 
 
-// Counter for chain events
-int chainCounter = 0;     
+//  initialise chainCounter 
+  int chainCounter ;
 
-// 1 =  Chain down / count up, -1 = Chain up / count backwards
-int upDown = WINDLASS_GO_DOWN;       
 
-// Stores last ChainCounter value to allow storage to nonvolatile storage in case of value changes
-int lastSavedCounter = 0;
+// Define windlass (anchor winch)  gypsy details
+// example used: Muir 4200 Thor horizontal windlass 10mm chain
+// Chain wheel reference #   ;  1 rotation = 0.405m
+// Translates one sensor  impulse to meters ( 0.405 m per pulse)
 
-#define ENABLE_DEMO 1                // Set to 1 to enable Demo Mode with up/down counter
-#define SAFETY_STOP 0                // Defines safety stop for chain up. Stops defined number of events before reaching zero
-#define MAX_CHAIN_LENGTH 40          // Define maximum chan length. Relay off after the value is reached
-
-// Translates counter impuls to meter 0,33 m per pulse
-float chainCalibrationValue = 0.33f; 
+float chainCalibrationValue = 0.405f; 
 float chainCalibrationOffset = 0.00f;
 
-unsigned long lastChainSpeedMills = millis();
+// initiate an instance of the Preferences library. Here its called preferences
+
+  Preferences preferences;
+
 
 // The setup function performs one-time application initialization.
 void setup() {
 
-  // Delays
-  int goingUpDownSensorReadDelay = 10;
-  int goingUpDownSensorDebounceDelay = 15;
-  int chainCounterSensorDebounceDelay = 10;
 
-  // Configuraion paths
+ // Open Preferences with "my_app" namespace. Each application module, library, etc
+  // has to use a namespace name to prevent key name collisions. 
+  // We will open storage in RW-mode (second parameter has to be false).
+  // Note: Namespace name is limited to 15 chars.
+
+  preferences.begin("my_app", false);
+
+  // Retrieves stored_ChainCounter value from nonvolatile storage
+  //  if the key does not exist, it will return a default value of 0.
+  // Note: Key name is limited to 15 chars.
+  // "counter" is the name of the key used to store chainCounter in ESP32 flash (aka Non Vol)
+
+ int  stored_chainCounter = preferences.getInt("counter", 0);
+
+// retrieve the stored counter and update chainCounter 
+ chainCounter=stored_chainCounter;
+
+// test ...  Store a dummy  counter value =45 to the Preferences
+// confirmed workin ok... 
+/// needs some logic for when/how to do the put 
+// after a wait period to let chain deployment settle
+//  (to reduce frequency/number of writes to flash memory)
+              
+    preferences.putInt("counter", 45);
+
+// Close the Preferences...
+     preferences.end();
+
+// 
+
+
+// Delays
+ int goingUpSensorDebounceDelay = 30;
+ int goingDownSensorDebounceDelay = 30;
+ int chainCounterSensorDebounceDelay = 10;
+ int resetbtnDebounceDelay = 20;
+
+  // Configuration paths
   String goingUpDownSensorReadDelayConfigPath = "/sensor_going_up_down/read_delay";
   String windlassStatusSKPathConfigPath = "/windlass_status/sk";
-  String goingUpDownSensorDebounceDelayConfigPath = "/sensor_going_up_down/debounce_delay";
+  String goingUpSensorDebounceDelayConfigPath = "/sensor_going_up/debounce_delay";
+  String goingDownSensorDebounceDelayConfigPath = "/sensor_going_down/debounce_delay";
   String chainCounterSKPathConfigPath = "/rodeDeployed/sk";
   String chainCounterSensorDebounceDelayConfigPath = "/chain_counter_sensor/debounce_delay";
   String chainSpeedSKPathConfigPath = "/chainSpeed/sk";
   String chainCalibrationSKPathConfigPath = "/chain_counter_sensor/calibration_value";
+  String resetbtnDebounceDelaySKPathConfigPath = "/chain_counter_resetbtn_debounce/delay";
 
   // Signal K paths
   String windlassStatusSKPath = "navigation.anchor.windlass.status";
@@ -105,7 +149,7 @@ void setup() {
   chainSpeedMetadata->display_name_ = "Windlass speed";
   chainSpeedMetadata->short_name_ = "Chain speed";
   
-
+ 
 
 #ifndef SERIAL_DEBUG_DISABLED
   SetupSerialDebug(115200);
@@ -115,99 +159,53 @@ void setup() {
   SensESPAppBuilder builder;
   sensesp_app = (&builder)
                     // Set a custom hostname for the app.
-                    ->set_hostname("signalk-windlass-controller")
-                    // Optionally, hard-code the WiFi and Signal K server
-                    // settings. This is normally not needed.
-                    //->set_wifi("My WiFi SSID", "my_wifi_password")
-                    //->set_sk_server("192.168.10.3", 80)
+                    ->set_hostname("sensESP windlass-chain-counter")
+                   ->set_wifi("ssid", "password")
+                    ->set_sk_server("192.168.1.69", 80)
                     ->get_app();
 
-
-  // Set GPIO pin 15 to output and toggle it every 650 ms
-
-  const uint8_t kDigitalOutputPin = 15;
-  const unsigned int kDigitalOutputInterval = 650;
-  pinMode(kDigitalOutputPin, OUTPUT);
-  app.onRepeat(kDigitalOutputInterval, [kDigitalOutputPin]() {
-    digitalWrite(kDigitalOutputPin, !digitalRead(kDigitalOutputPin));
-  });
-
-  
-  
-  
-
-  // Connect the digital input to a lambda consumer that prints out the
-  // value every time it changes.
-
-  // Test this yourself by connecting pin 15 to pin 14 with a jumper wire and
-  // see if the value changes!
-
-  
-
-  
+  // define output PINs    
   pinMode(goUpPin, OUTPUT);
   pinMode(goDownPin, OUTPUT);
 
+//set initial state of outputs
   digitalWrite(goUpPin, LOW );
   digitalWrite(goDownPin, LOW );
   
-  /**
-   * DigitalInputChange monitors a physical button connected to BUTTON_PIN.
+/**
+   * DigitalInputChange monitors a physical button/solenoid connected to BUTTON_PIN.
+   * The input PIN is set to PULLDOWN (LOW) & the button or solenoid must take the input voltage HIGH when operated.
    * Because its interrupt type is CHANGE, it will emit a value when the button
-   * is pressed, and again when it's released, but that's OK - our
-   * LambdaConsumer function will act only on the press, and ignore the release.
-   * DigitalInputChange looks for a change every read_delay ms, which can be
-   * configured at read_delay_config_path in the Config UI.
+   * is pressed, and again when it's released.
+   * The LambdaConsumer function determines the action based on HIGH (pressed) or LOW (released) state of input
    */
-
   
-  auto* goingUpSensor = new DigitalInputChange(
-      goingUpPin, INPUT_PULLDOWN, goingUpDownSensorReadDelay, goingUpDownSensorReadDelayConfigPath);
+  auto* goingUpSensor = new DigitalInputChange(goingUpPin, INPUT_PULLDOWN, CHANGE);
 
-  auto* goingDownSensor = new DigitalInputChange(
-      goingDownPin, INPUT_PULLDOWN, goingUpDownSensorReadDelay, goingUpDownSensorReadDelayConfigPath);
+  auto* goingDownSensor = new DigitalInputChange(goingDownPin, INPUT_PULLDOWN, CHANGE);
 
-
-  
 
   auto* windlassStatusSKOutput = new SKOutputString(windlassStatusSKPath, windlassStatusSKPathConfigPath);
-  windlassStatusSKOutput->emit("off");
+
+  // initialise SKPath with "off" status
+  
+    windlassStatusSKOutput->emit("off");
 
   /**
-   * Create a DebounceInt to make sure we get a nice, clean signal from the
-   * button. Set the debounce delay period to 15 ms, which can be configured at
-   * debounce_config_path in the Config UI.
+   * Create a Debounce for each direction sensor to a clean signal from the
+   * button/solenoid. The debounce delay period (setup initially under // Delays above) 
+   *  can also be configured by debounce_config_path in the Config UI.
    */
-  
-  auto* goingUpDownSensorDebounce = new DebounceInt(goingUpDownSensorDebounceDelay, goingUpDownSensorDebounceDelayConfigPath); 
+    auto* goingUpSensorDebounce = new DebounceInt(goingUpSensorDebounceDelay, goingUpSensorDebounceDelayConfigPath); 
 
-  // Manage the going up sensor
-  goingUpSensor
-    // Debounce the signal
-    ->connect_to(goingUpDownSensorDebounce)
+    auto* goingDownSensorDebounce = new DebounceInt(goingDownSensorDebounceDelay, goingDownSensorDebounceDelayConfigPath); 
 
-    // Update the windlass status according to the going up sensor
-    ->connect_to(new LambdaConsumer<int>([windlassStatusSKOutput](int input) {
 
-      // Check if the windlass is going up (press)
-      if (input == HIGH) {
+  //  Manage the going down sensor
 
-        // The windlass is going up, update the upDown variable
-        upDown = WINDLASS_GO_UP;
-
-        // Update the windlass status
-        windlassStatusSKOutput->emit("up");
-      } else {
-
-        // The windlass is not going up anymore (releae), update the windlass status
-        windlassStatusSKOutput->emit("off");
-      }
-    }));
-
-  // Manage the going down sensor
   goingDownSensor
     // Debounce the signal
-    ->connect_to(goingUpDownSensorDebounce)
+    ->connect_to(goingDownSensorDebounce)
 
     // Update the windlass status according to the going down sensor
     ->connect_to(new LambdaConsumer<int>([windlassStatusSKOutput](int input) {
@@ -226,23 +224,51 @@ void setup() {
       }
     }));
 
-  // Define a digital input sensor with debouncer as a counter
-  auto* chainCounterSensor = new DigitalInputChange(chainCounterPin, INPUT_PULLUP,CHANGE);
+
+  // Manage the going up sensor 
+
+  goingUpSensor
+    // Debounce the signal
+    ->connect_to(goingUpSensorDebounce)
+
+    // Update the windlass status according to the going up sensor
+    ->connect_to(new LambdaConsumer<int>([windlassStatusSKOutput](int input) {
+
+      // Check if the windlass is going up (press)
+      if (input == HIGH) {
+
+        // The windlass is going up, update the upDown variable
+        upDown = WINDLASS_GO_UP;
+
+        // Update the windlass status
+        windlassStatusSKOutput->emit("up");
+      } else {
+
+        // The windlass is not going up anymore (release), update the windlass status
+        windlassStatusSKOutput->emit("off");
+      }
+    }));
+
+
+  // Define a digital input sensor for detecting windlass rotations (from hall effect sensor or reed relay)
+  //  PULLDOWN input type, assumes its a POSITIVE pulse,  RISING for leading edgetrigger
+  //NOTE: if connecting sensor to BOTH chainCounterPIN  AND chainSensorPIN .. 
+  //  then BOTH DigitalInputChange functions (INPUT_PULLDOWN and RISING) MUST be set the same!!
+  auto* chainCounterSensor = new DigitalInputChange(chainCounterPin, INPUT_PULLDOWN,RISING);
 
   /**
-   * Create a DebounceInt to make sure we get a nice, clean signal from the
-   * button. Set the debounce delay period to 15 ms, which can be configured at
-   * debounce_config_path in the Config UI.
+   * Create a DebounceInt to ensure a clean signal from the button. 
+   * Set the debounce delay period initially (from //Delays above), 
+   * which can also be configured via debounce_config_path in the Config UI.
    */
   auto* chainCounterSensorDebounce = new DebounceInt(chainCounterSensorDebounceDelay, chainCounterSensorDebounceDelayConfigPath); 
   
-  // Manage the chain counter sensor
+  // ******  Manage the chain counter sensor *******
   chainCounterSensor
-
     // Debounce the signal
     ->connect_to(chainCounterSensorDebounce)
 
-    // Transform the signal in deployed rod in meters
+    // Transform the signal in deployed rode in meters
     ->connect_to(
 
       // Create a lambda transform function
@@ -257,60 +283,9 @@ void setup() {
             // Increase or decrease the couter
             chainCounter = chainCounter + upDown;
             
-            // Safety stop counter reached while chain is going up
-            if (
-              // If the windlass is going up...
-              digitalRead(goingUpPin) == HIGH
-              
-              // ...and the chain counter reached the safety limit, stop the windlass
-              && (chainCounter <= SAFETY_STOP) 
-            ) {  
-              // Shutdown the relay on up
-              digitalWrite(goUpPin, LOW );
-
-              // Update windlass status
-              windlassStatusSKOutput->emit("off");
-
-            }
-            // Maximum chain lenght reached   
-            else if (
-              // If the windlass is going up...
-              digitalRead(goingDownPin) == HIGH
-
-              // ...and the rod is deployed, stop the windlass
-              && (chainCounter >= MAX_CHAIN_LENGTH) 
-            ) {  
-              // Shutdown the relay on up
-              digitalWrite(goUpPin, LOW );
-
-              // Update windlass status
-              windlassStatusSKOutput->emit("off");
-            }
-            // Check if the chain if free falling
-            else if (
-              // If the windlass is going down...
-              upDown == WINDLASS_GO_DOWN
-
-              // ...but the going down sensor is not sensing it, the windlass is in free down status
-              && digitalRead(goingDownPin)==LOW) {
-
-              // Update windlass status
-              windlassStatusSKOutput->emit("freeDown");  
-            }
-            // Check if the chain is free rising (for example manually)
-            else if (
-              // If the windlass is going up...
-              upDown == WINDLASS_GO_UP
-              
-              // ...but the going up sensor is not sensing it, the windlass is in free up status
-              && digitalRead(goingUpPin)==LOW) {
-              
-              // Update windlass status
-              windlassStatusSKOutput->emit("freeUp");  
-            }
           }
 
-          // Returm thr chain counter value
+          // Returm the chain counter value
           return chainCounter;
         }
         )
@@ -319,18 +294,28 @@ void setup() {
     ->connect_to(new SKOutputFloat(chainCounterSKPath, chainCounterSKPathConfigPath, chainCounterMetadata));
     
   
-  // Define a counter sensor with debouncer as for measuring the chain speed
-  auto* chainSpeedSensor = new DigitalInputDebounceCounter(chainSpeedPin, INPUT_PULLUP, RISING, 250, chainCounterSensorDebounceDelay, chainCounterSensorDebounceDelayConfigPath);
+  // Define a counter sensor with debouncer  for measuring the chain speed
+  // in the above  windlass example, the wheel typically rotates between 1 to 2 seconds per revolution ..
+  //  so the read timer is set to cover a 2000mS window
+  // PULLDOWN input type, assumes its a POSITIVE pulse (detection = RISING for leading edge)
 
-  // Manage the chain speed sensor
+  auto* chainSpeedSensor = new DigitalInputDebounceCounter(chainSpeedPin, INPUT_PULLDOWN, RISING, 2000,
+                                     chainCounterSensorDebounceDelay, chainCounterSensorDebounceDelayConfigPath);
+
+  // ****** Manage the chain speed sensor ******
+  // Counter result is put thru linear transform to get meters for every result period (2000mS)
+  // Then thru a MOving average calculation over a 4 sec window, 
+  // & with above 2000mS counter period, the moving average output needs to be scaled by 0.5 to get counts per second 
+ 
   chainSpeedSensor
       ->connect_to(new Linear(chainCalibrationValue, chainCalibrationOffset, chainCalibrationSKPathConfigPath))
-      ->connect_to(new MovingAverage(4, 4))                                          
+      ->connect_to(new MovingAverage(4, 0.5F))                                          
       ->connect_to(new SKOutputFloat(chainSpeedSKPath, chainSpeedSKPathConfigPath, chainSpeedMetadata));  
 
   
+  // Create a listener for the SignalK windlass status path
 
-  // Create a linstener for the SignalK windlass status path
+ /**  
   auto* windlassStatusListener = new StringSKListener(windlassStatusSKPath);
 
   // Connect the listener
@@ -362,6 +347,87 @@ void setup() {
             digitalWrite(goDownPin,LOW); 
           }
         }));
+
+*/
+
+
+  // Connect a physical button that will reset chainCounter = 0
+  // a momentary push button pulls the PIN low when operated 
+  // there is probably a more efficient way to code this section?
+  
+  DigitalInputState* resetbtn = new DigitalInputState(resetPin, INPUT_PULLUP, 100);
+  
+auto* resetbtnDebounce = new DebounceInt(resetbtnDebounceDelay, resetbtnDebounceDelaySKPathConfigPath); 
+  
+  // ******  reset the chain counter  *******
+  resetbtn
+    // Debounce the signal
+    ->connect_to(resetbtnDebounce)
+
+    // Transform 
+    ->connect_to(
+
+      // Create a lambda transform function
+      new LambdaTransform<int,int>(
+
+        // Catch the counter and the resetbtn state, input is LOW when button pressed 
+        [windlassStatusSKOutput](int input) {
+        
+          // Check if button pressed (input =LOW )
+          if (input == LOW) {
+
+            // reset couter =0
+            chainCounter = 0;
+            
+          }
+
+          // Returm the updated chain counter value
+          return chainCounter;
+        }
+        )
+      )
+  ->connect_to(new Linear(chainCalibrationValue, chainCalibrationOffset, chainCalibrationSKPathConfigPath))
+  ->connect_to(new SKOutputFloat(chainCounterSKPath, chainCounterSKPathConfigPath, chainCounterMetadata));
+
+
+
+// *********** Reset chain counter from NodeRed or similar external program/application  **************
+// monitor an SKPath that is toggled  "true" by external NodeRed flow 
+// there is probably a better way to achive this using a Put? style message
+
+// Configuration Paths
+String chainCounterResetSKPath = "navigation.anchor.chainCounterReset";
+
+auto* windlassResetListener = new BoolSKListener(chainCounterResetSKPath);
+
+
+     windlassResetListener 
+    ->connect_to(
+
+      // Create a lambda transform function
+      new LambdaTransform<int,int>(
+
+        // Catch the counter and the windlassResetListener state, input is LOW to reset chainCounter 
+        [windlassStatusSKOutput](int input) {
+        
+          // Check if remote skpath set = true )
+          if (input == true) {
+
+            // reset couter =0
+            chainCounter = 0;
+            
+          }
+
+          // Returm the updated chain counter value
+          return chainCounter;
+        }
+        )
+      )
+  ->connect_to(new Linear(chainCalibrationValue, chainCalibrationOffset, chainCalibrationSKPathConfigPath))
+  ->connect_to(new SKOutputFloat(chainCounterSKPath, chainCounterSKPathConfigPath, chainCounterMetadata));
+
+
+//  ********************
 
   // Start networking, SK server connections and other SensESP internals
   sensesp_app->start();
